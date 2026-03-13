@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import './App.css';
 import {
   applyBoardPreset,
@@ -232,7 +233,7 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -259,7 +260,7 @@ function App() {
           <div className="eyebrow">Single Device Host</div>
           <h1>双身份狼人杀自动主持</h1>
           <p className="lead">
-            单手机、无人类 DM、带语音播报和复盘日志的线下主持网页。
+            单手机、无人类 DM、默认开启语音播报的线下主持网页。
           </p>
         </section>
 
@@ -451,13 +452,13 @@ function App() {
             </div>
 
             <div className="info-block">
-              <strong>夜晚节奏</strong>
-              <p>夜晚固定按狼人、预言家、守卫、女巫顺序执行，不会因为场上没有该角色而跳过。</p>
+              <strong>主持模式</strong>
+              <p>网页只负责固定顺序播报、阶段倒计时和结果记录，不负责替玩家统计票型。</p>
             </div>
 
             <div className="info-block">
-              <strong>女巫规则</strong>
-              <p>女巫会看到本夜记录的击杀目标，并在固定时长内选择救人、毒人或跳过。</p>
+              <strong>夜晚节奏</strong>
+              <p>夜晚固定按狼人、预言家、守卫、女巫顺序执行，不会因为场上没有该角色而跳过。</p>
             </div>
           </aside>
         </section>
@@ -476,7 +477,7 @@ function App() {
               </div>
               <div className="info-block">
                 <strong>3. 网页按固定阶段主持</strong>
-                <p>网页只播报阶段语音，夜晚和白天结果都通过页面手动记录，避免暴露场上角色信息。</p>
+                <p>语音只播报阶段提示，夜晚和白天结果都通过页面手动记录，避免暴露场上角色信息。</p>
               </div>
             </div>
           </article>
@@ -485,7 +486,7 @@ function App() {
             <div className="section-title">使用提示</div>
             <div className="info-block">
               <strong>语音默认开启</strong>
-              <p>大多数浏览器需要你先点一次页面按钮，后续阶段播报才会正常响起。</p>
+              <p>大多数浏览器仍需要你先点一次页面按钮，后续阶段播报才会正常响起。</p>
             </div>
             <div className="info-block">
               <strong>白天投票自行统计</strong>
