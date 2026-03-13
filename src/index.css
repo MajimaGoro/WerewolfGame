@@ -1,0 +1,21 @@
+html {
+  font-family:
+    'Noto Serif SC',
+    'Source Han Serif SC',
+    'Songti SC',
+    serif;
+  color-scheme: light;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}

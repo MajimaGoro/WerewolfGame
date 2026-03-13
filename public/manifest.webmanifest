@@ -1,0 +1,19 @@
+{
+  "name": "双身份狼人杀自动主持",
+  "short_name": "狼人杀主持",
+  "description": "单手机、无人类 DM、带语音播报与复盘日志的双身份狼人杀网页主持工具。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#efe5d7",
+  "theme_color": "#9e3428",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "./icon-app.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
