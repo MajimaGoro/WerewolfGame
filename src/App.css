@@ -377,6 +377,11 @@ button.danger {
   letter-spacing: 0.06em;
 }
 
+.timer-display.compact {
+  margin-top: 8px;
+  font-size: clamp(2.1rem, 8vw, 3rem);
+}
+
 .info-block {
   margin-top: 12px;
   background: rgba(255, 251, 247, 0.74);
@@ -420,7 +425,8 @@ button.danger {
 @media (max-width: 900px) {
   .setup-layout,
   .flow-layout,
-  .result-layout {
+  .result-layout,
+  .release-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -69,12 +69,12 @@ export interface GameLogEvent {
 }
 
 export interface NightQueueItem {
-  playerId: PlayerId;
+  playerId?: PlayerId;
   roleId: RoleId;
 }
 
 export type ActiveStep =
-  | { kind: 'nightAction'; playerId: PlayerId; roleId: RoleId };
+  | { kind: 'nightAction'; playerId?: PlayerId; roleId: RoleId };
 
 export interface FlowState {
   screen: Screen;
@@ -95,6 +95,9 @@ export interface FlowState {
   discussionDurationSeconds: number;
   discussionRemainingSeconds: number;
   discussionEndsAt: number | null;
+  nightStageDurationSeconds: number;
+  nightStageRemainingSeconds: number;
+  nightStageEndsAt: number | null;
 }
 
 export interface RoleCounts {
@@ -111,6 +114,8 @@ export interface BoardDefinition {
   description: string;
   playerCount: number;
   discussionMinutes: number;
+  wolfDiscussionSeconds: number;
+  roleActionSeconds: number;
   roleCounts: RoleCounts;
 }
 
@@ -120,6 +125,8 @@ export interface GameConfig {
   boardId: BoardPresetId;
   boardName: string;
   discussionMinutes: number;
+  wolfDiscussionSeconds: number;
+  roleActionSeconds: number;
   roleCounts: RoleCounts;
 }
 
@@ -129,6 +136,8 @@ export interface DraftConfig {
   boardId: BoardPresetId;
   boardName: string;
   discussionMinutes: number;
+  wolfDiscussionSeconds: number;
+  roleActionSeconds: number;
   roleCounts: RoleCounts;
 }
 

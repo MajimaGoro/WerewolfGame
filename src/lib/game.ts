@@ -20,6 +20,7 @@ import type {
 } from '../types';
 
 const STORAGE_KEY = 'werewolf-game-mvp';
+const FIXED_NIGHT_ORDER: RoleId[] = ['wolf', 'seer', 'guard', 'witch'];
 const SPECIAL_ROLE_IDS: Exclude<RoleId, 'villager'>[] = ['wolf', 'seer', 'guard', 'witch'];
 
 export function getRoleDefinition(roleId: RoleId) {
@@ -42,6 +43,8 @@ export function newDraftConfig(): DraftConfig {
     boardId: preset.id,
     boardName: preset.name,
     discussionMinutes: preset.discussionMinutes,
+    wolfDiscussionSeconds: preset.wolfDiscussionSeconds,
+    roleActionSeconds: preset.roleActionSeconds,
     roleCounts: { ...preset.roleCounts },
   };
 }
@@ -73,10 +76,15 @@ export function applyBoardPreset(
 
   return {
     playerCount: preset.playerCount,
-    playerNames: startFreshDraftNames(preset.playerCount, currentDraft.playerNames),
+    playerNames: startFreshDraftNames(
+      preset.playerCount,
+      currentDraft.playerNames,
+    ),
     boardId: preset.id,
     boardName: preset.name,
     discussionMinutes: preset.discussionMinutes,
+    wolfDiscussionSeconds: preset.wolfDiscussionSeconds,
+    roleActionSeconds: preset.roleActionSeconds,
     roleCounts: { ...preset.roleCounts },
   };
 }
@@ -96,9 +104,9 @@ export function normalizeRoleCounts(
 ): RoleCounts {
   const base = {
     wolf: Math.max(1, incoming?.wolf ?? 2),
-    seer: Math.max(0, incoming?.seer ?? 1),
-    guard: Math.max(0, incoming?.guard ?? 1),
-    witch: Math.max(0, incoming?.witch ?? 1),
+    seer: clampBinary(incoming?.seer ?? 1),
+    guard: clampBinary(incoming?.guard ?? 1),
+    witch: clampBinary(incoming?.witch ?? 1),
     villager: 0,
   };
   const totalSpecial = base.wolf + base.seer + base.guard + base.witch;
@@ -134,6 +142,8 @@ export function createGame(draft: DraftConfig): GameState {
     boardId: draft.boardId,
     boardName: draft.boardName,
     discussionMinutes: draft.discussionMinutes,
+    wolfDiscussionSeconds: draft.wolfDiscussionSeconds,
+    roleActionSeconds: draft.roleActionSeconds,
     roleCounts,
   };
   const deck = shuffle(buildRoleDeck(roleCounts));
@@ -169,11 +179,14 @@ export function createGame(draft: DraftConfig): GameState {
       discussionDurationSeconds: config.discussionMinutes * 60,
       discussionRemainingSeconds: config.discussionMinutes * 60,
       discussionEndsAt: null,
+      nightStageDurationSeconds: 0,
+      nightStageRemainingSeconds: 0,
+      nightStageEndsAt: null,
     },
     nightActions: [],
     votes: [],
     logs: [],
-    speechEnabled: false,
+    speechEnabled: true,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -257,55 +270,56 @@ export function getBoardSummary(config: GameConfig | DraftConfig) {
     `${roleCounts.guard} 张守卫`,
     `${roleCounts.witch} 张女巫`,
     `${roleCounts.villager} 张村民`,
+    `狼人讨论 ${config.wolfDiscussionSeconds} 秒`,
+    `其他角色 ${config.roleActionSeconds} 秒`,
   ];
 }
 
 export function getPrivateStepTargets(game: GameState, step: ActiveStep) {
-  const selfId = step.playerId;
-  const roleId = step.roleId;
+  const actorCamp =
+    step.roleId === 'wolf'
+      ? 'wolf'
+      : undefined;
 
-  if (roleId === 'witch') {
-    const witchRole = getAssignedRole(game.players, selfId, 'witch');
-    const poisonAvailable = Boolean(witchRole?.resources?.poisonAvailable);
-    if (!poisonAvailable) {
-      return [];
+  return game.players.filter((player) => {
+    if (!player.isAlive) {
+      return false;
     }
-  }
-
-  return game.players.filter((player) => player.isAlive && player.id !== selfId);
+    if (step.playerId && player.id === step.playerId) {
+      return false;
+    }
+    if (step.roleId === 'wolf' && actorCamp && getPlayerCamp(player) === 'wolf') {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function getPrivateStepChoices(game: GameState): ChoiceOption[] {
   const step = game.flow.activeStep;
-  if (!step || step.kind !== 'nightAction') {
-    return [];
-  }
-
-  if (step.roleId !== 'witch') {
+  if (!step || step.kind !== 'nightAction' || step.roleId !== 'witch') {
     return [];
   }
 
   const witchRole = getAssignedRole(game.players, step.playerId, 'witch');
-  const context = getWitchContext(game, step.playerId);
+  const attackedPlayerId = getNightKillTarget(game, game.flow.day);
+  const attacked = attackedPlayerId
+    ? game.players.find((player) => player.id === attackedPlayerId)
+    : undefined;
   const options: ChoiceOption[] = [];
 
-  if (context.attackedPlayerId && witchRole?.resources?.saveAvailable) {
-    const attacked = game.players.find(
-      (player) => player.id === context.attackedPlayerId,
-    );
-    if (attacked) {
-      options.push({
-        id: 'save',
-        label: `使用解药救 ${attacked.seat} 号`,
-        description: `${attacked.name} 是今晚狼人票数最高的目标。`,
-      });
-    }
+  if (attacked && witchRole?.resources?.saveAvailable) {
+    options.push({
+      id: 'save',
+      label: `使用解药救 ${attacked.seat} 号`,
+      description: `${attacked.name} 是本夜记录的击杀目标。`,
+    });
   }
 
   options.push({
     id: 'skip',
     label: '跳过本夜',
-    description: '不使用药剂，直接结束女巫回合。',
+    description: '本夜不使用药剂，等待阶段结束。',
   });
 
   return options;
@@ -365,7 +379,7 @@ export function startNextPublicStep(game: GameState) {
   }
 
   if (game.flow.phase === 'day') {
-    return beginVoting(syncDiscussionTimer(game));
+    return beginManualVote(syncDiscussionTimer(game));
   }
 
   if (game.flow.phase === 'vote') {
@@ -387,7 +401,7 @@ export function startDiscussionTimer(game: GameState) {
       ...synced.flow,
       discussionEndsAt:
         Date.now() + synced.flow.discussionRemainingSeconds * 1000,
-      helperText: '讨论计时进行中。你可以暂停、重置，或随时进入投票。',
+      helperText: '讨论计时进行中。线下统计投票后，在页面录入出局玩家。',
     },
     updatedAt: Date.now(),
   });
@@ -404,7 +418,7 @@ export function pauseDiscussionTimer(game: GameState) {
     flow: {
       ...synced.flow,
       discussionEndsAt: null,
-      helperText: '讨论计时已暂停。你可以继续讨论或直接进入投票。',
+      helperText: '讨论计时已暂停。你可以继续讨论或直接录入投票结果。',
     },
     updatedAt: Date.now(),
   });
@@ -449,7 +463,7 @@ export function syncDiscussionTimer(game: GameState) {
       discussionEndsAt: remainingSeconds === 0 ? null : game.flow.discussionEndsAt,
       helperText:
         remainingSeconds === 0
-          ? '讨论时间到。你可以继续讨论，也可以直接进入投票。'
+          ? '讨论时间到。线下确认票型后，在页面录入出局玩家。'
           : game.flow.helperText,
     },
     updatedAt: Date.now(),
@@ -462,6 +476,41 @@ export function syncDiscussionTimer(game: GameState) {
   }
 
   return saveGame(next);
+}
+
+export function syncNightStageTimer(game: GameState) {
+  if (
+    game.flow.screen !== 'private' ||
+    !game.flow.nightStageEndsAt ||
+    !game.flow.activeStep
+  ) {
+    return game;
+  }
+
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((game.flow.nightStageEndsAt - Date.now()) / 1000),
+  );
+
+  if (remainingSeconds === game.flow.nightStageRemainingSeconds) {
+    return game;
+  }
+
+  const withTick = saveGame({
+    ...game,
+    flow: {
+      ...game.flow,
+      nightStageRemainingSeconds: remainingSeconds,
+      nightStageEndsAt: remainingSeconds === 0 ? null : game.flow.nightStageEndsAt,
+    },
+    updatedAt: Date.now(),
+  });
+
+  if (remainingSeconds === 0) {
+    return continueAfterPrivateStep(withTick);
+  }
+
+  return withTick;
 }
 
 export function formatSeconds(totalSeconds: number) {
@@ -479,95 +528,108 @@ export function submitPrivateStep(
   step: ActiveStep,
   choice?: PrivateChoice,
 ) {
-  if (game.flow.privateResult) {
-    return continueAfterPrivateStep(game);
-  }
-
-  if (step.kind !== 'nightAction') {
+  if (step.kind !== 'nightAction' || !choice) {
     return game;
   }
 
-  const role = getRoleDefinition(step.roleId);
-  if (!role.ability) {
-    return continueAfterPrivateStep(game);
+  if (game.flow.privateResult) {
+    return game;
   }
 
   if (step.roleId === 'witch') {
     return submitWitchAction(game, step, choice);
   }
 
-  if (!choice || choice === 'abstain' || choice === 'skip' || choice === 'save') {
+  if (choice === 'abstain' || choice === 'skip' || choice === 'save') {
     return game;
   }
 
-  const action: NightAction = {
+  const role = getRoleDefinition(step.roleId);
+  if (!role.ability) {
+    return game;
+  }
+
+  const nextActions = replaceNightAction(game.nightActions, {
     night: game.flow.day,
-    actorPlayerId: step.playerId,
+    actorPlayerId: step.playerId ?? 'stage',
     roleId: step.roleId,
     effectType: role.ability.effectType,
     targetId: choice,
-  };
+  });
 
   const targetPlayer = game.players.find((player) => player.id === choice);
   const privateResult =
-    action.effectType === 'inspect' && targetPlayer
-      ? `${targetPlayer.seat} 号 ${targetPlayer.name} 属于${
+    step.roleId === 'seer' && targetPlayer
+      ? `查验结果：${targetPlayer.seat} 号 ${targetPlayer.name} 属于${
           getPlayerCamp(targetPlayer) === 'wolf' ? '狼人' : '好人'
         }阵营。`
-      : '操作已记录，请把手机交回桌面。';
+      : '操作已记录，请放回手机并继续闭眼等待。';
 
   return saveGame(
     addLog(
       {
         ...game,
-        nightActions: [...game.nightActions, action],
+        nightActions: nextActions,
         flow: {
           ...game.flow,
           privateResult,
-          speechText: privateResult,
+          speechText: getStageSpeech(step.roleId),
         },
         updatedAt: Date.now(),
       },
       'night',
       'private',
-      `${role.name} 完成操作`,
-      `${role.name} 已提交夜间操作。`,
+      `${role.name} 记录完成`,
+      `${role.name} 已记录本夜目标。`,
     ),
   );
 }
 
-export function submitVote(
-  game: GameState,
-  voterId: PlayerId,
-  choice: VoteChoice,
-) {
+export function submitVote(game: GameState, choice: VoteChoice) {
   const vote: VoteRecord = {
     day: game.flow.day,
-    voterId,
+    voterId: 'manual',
     type: choice === 'abstain' ? 'abstain' : 'normal',
     targetId: choice === 'abstain' ? undefined : choice,
   };
 
-  const votes = [...game.votes, vote];
-  const voteIndex = game.flow.voteIndex + 1;
-  if (voteIndex < game.flow.voteOrder.length) {
-    return saveGame({
-      ...game,
-      votes,
-      flow: {
-        ...game.flow,
-        voteIndex,
-        speechText: `请下一位存活玩家完成投票。`,
-      },
-      updatedAt: Date.now(),
-    });
+  let players = game.players;
+  let publicMessage = '白天结束，本轮无人出局。';
+
+  if (choice !== 'abstain') {
+    players = players.map((player) =>
+      player.id === choice ? { ...player, isAlive: false } : player,
+    );
+    const target = players.find((player) => player.id === choice);
+    if (target) {
+      publicMessage = `白天结束，${target.seat} 号 ${target.name} 出局。`;
+    }
   }
 
-  const resolved = resolveVote({
-    ...game,
-    votes,
-    updatedAt: Date.now(),
-  });
+  const resolved = addLog(
+    {
+      ...game,
+      players,
+      votes: [...game.votes, vote],
+      flow: {
+        ...game.flow,
+        screen: 'public',
+        phase: 'vote',
+        title: `第 ${game.flow.day} 天结算`,
+        publicMessage,
+        helperText: '如果游戏未结束，点击进入下一夜。',
+        speechText: '白天结束。',
+        actionLabel: '开始下一夜',
+        discussionEndsAt: null,
+      },
+      updatedAt: Date.now(),
+    },
+    'vote',
+    'public',
+    '白天结果已录入',
+    publicMessage,
+  );
+
   const winner = checkWinner(resolved);
   return saveGame(winner ?? resolved);
 }
@@ -575,114 +637,173 @@ export function submitVote(
 function submitWitchAction(
   game: GameState,
   step: ActiveStep,
-  choice?: PrivateChoice,
+  choice: PrivateChoice,
 ) {
-  const witchContext = getWitchContext(game, step.playerId);
   const witchRole = getAssignedRole(game.players, step.playerId, 'witch');
   if (!witchRole) {
-    return continueAfterPrivateStep(game);
+    return saveGame({
+      ...game,
+      flow: {
+        ...game.flow,
+        privateResult: '当前没有可用的女巫身份。',
+      },
+    });
   }
 
-  if (choice === 'save' && witchContext.attackedPlayerId && witchRole.resources?.saveAvailable) {
-    const savedPlayer = game.players.find(
-      (player) => player.id === witchContext.attackedPlayerId,
-    );
+  if (choice === 'save') {
+    const attackedPlayerId = getNightKillTarget(game, game.flow.day);
+    if (!attackedPlayerId || !witchRole.resources?.saveAvailable) {
+      return saveGame({
+        ...game,
+        flow: {
+          ...game.flow,
+          privateResult: '当前没有可救的击杀目标，或解药已用尽。',
+        },
+      });
+    }
+
     const nextGame = updateRoleResources(game, step.playerId, 'witch', {
       saveAvailable: false,
     });
+    const savedPlayer = nextGame.players.find(
+      (player) => player.id === attackedPlayerId,
+    );
+
     return saveGame(
       addLog(
         {
           ...nextGame,
-          nightActions: [
-            ...nextGame.nightActions,
-            {
-              night: nextGame.flow.day,
-              actorPlayerId: step.playerId,
-              roleId: 'witch',
-              effectType: 'save',
-              targetId: witchContext.attackedPlayerId,
-            },
-          ],
+          nightActions: replaceNightAction(nextGame.nightActions, {
+            night: nextGame.flow.day,
+            actorPlayerId: step.playerId ?? 'stage',
+            roleId: 'witch',
+            effectType: 'save',
+            targetId: attackedPlayerId,
+          }),
           flow: {
             ...nextGame.flow,
             privateResult: savedPlayer
-              ? `你使用了解药，${savedPlayer.seat} 号 ${savedPlayer.name} 将尝试存活到天亮。`
-              : '你使用了解药。',
-            speechText: '女巫已使用解药。',
+              ? `已使用解药，${savedPlayer.seat} 号 ${savedPlayer.name} 将不会因今晚击杀出局。`
+              : '已使用解药。',
+            speechText: getStageSpeech('witch'),
           },
           updatedAt: Date.now(),
         },
         'night',
         'private',
         '女巫使用解药',
-        '女巫选择了救人。',
+        '女巫记录了解药目标。',
       ),
     );
   }
 
-  if (choice && choice !== 'skip' && choice !== 'save' && choice !== 'abstain' && witchRole.resources?.poisonAvailable) {
-    const poisoned = game.players.find((player) => player.id === choice);
+  if (choice === 'skip') {
+    return saveGame(
+      addLog(
+        {
+          ...game,
+          nightActions: removeNightActionsForRole(
+            game.nightActions,
+            game.flow.day,
+            'witch',
+          ),
+          flow: {
+            ...game.flow,
+            privateResult: '你选择跳过本夜，请继续闭眼等待阶段结束。',
+            speechText: getStageSpeech('witch'),
+          },
+          updatedAt: Date.now(),
+        },
+        'night',
+        'private',
+        '女巫跳过本夜',
+        '女巫没有使用药剂。',
+      ),
+    );
+  }
+
+  if (choice !== 'abstain' && choice !== 'save' && witchRole.resources?.poisonAvailable) {
     const nextGame = updateRoleResources(game, step.playerId, 'witch', {
       poisonAvailable: false,
     });
+    const poisonedPlayer = nextGame.players.find((player) => player.id === choice);
+
     return saveGame(
       addLog(
         {
           ...nextGame,
-          nightActions: [
-            ...nextGame.nightActions,
-            {
-              night: nextGame.flow.day,
-              actorPlayerId: step.playerId,
-              roleId: 'witch',
-              effectType: 'poison',
-              targetId: choice,
-            },
-          ],
+          nightActions: replaceNightAction(nextGame.nightActions, {
+            night: nextGame.flow.day,
+            actorPlayerId: step.playerId ?? 'stage',
+            roleId: 'witch',
+            effectType: 'poison',
+            targetId: choice,
+          }),
           flow: {
             ...nextGame.flow,
-            privateResult: poisoned
-              ? `你使用了毒药，目标锁定为 ${poisoned.seat} 号 ${poisoned.name}。`
-              : '你使用了毒药。',
-            speechText: '女巫已使用毒药。',
+            privateResult: poisonedPlayer
+              ? `已使用毒药，目标为 ${poisonedPlayer.seat} 号 ${poisonedPlayer.name}。`
+              : '已使用毒药。',
+            speechText: getStageSpeech('witch'),
           },
           updatedAt: Date.now(),
         },
         'night',
         'private',
         '女巫使用毒药',
-        '女巫选择了毒人。',
+        '女巫记录了毒药目标。',
       ),
     );
   }
 
-  return saveGame(
-    addLog(
-      {
-        ...game,
-        flow: {
-          ...game.flow,
-          privateResult: '你选择跳过本夜，不使用药剂。',
-          speechText: '女巫选择跳过本夜。',
-        },
-        updatedAt: Date.now(),
-      },
-      'night',
-      'private',
-      '女巫跳过本夜',
-      '女巫没有使用药剂。',
-    ),
-  );
+  return saveGame({
+    ...game,
+    flow: {
+      ...game.flow,
+      privateResult: '毒药已用尽，请继续闭眼等待阶段结束。',
+      speechText: getStageSpeech('witch'),
+    },
+    updatedAt: Date.now(),
+  });
 }
 
 function beginNightActions(game: GameState) {
   const nightQueue = buildNightQueue(game.players);
-  if (nightQueue.length === 0) {
+  return startNightStage({
+    ...game,
+    flow: {
+      ...game.flow,
+      nightQueue,
+      nightQueueIndex: 0,
+    },
+  });
+}
+
+function continueAfterPrivateStep(game: GameState) {
+  const nextIndex = game.flow.nightQueueIndex + 1;
+  if (nextIndex < game.flow.nightQueue.length) {
+    return startNightStage({
+      ...game,
+      flow: {
+        ...game.flow,
+        nightQueueIndex: nextIndex,
+      },
+    });
+  }
+
+  return resolveNight(game);
+}
+
+function startNightStage(game: GameState) {
+  const current = game.flow.nightQueue[game.flow.nightQueueIndex];
+  if (!current) {
     return resolveNight(game);
   }
 
-  const current = nightQueue[0];
+  const durationSeconds =
+    current.roleId === 'wolf'
+      ? game.config.wolfDiscussionSeconds
+      : game.config.roleActionSeconds;
   const prompt = getNightPrompt(game, current);
 
   return saveGame({
@@ -695,50 +816,23 @@ function beginNightActions(game: GameState) {
       publicMessage: prompt.publicMessage,
       helperText: prompt.helperText,
       speechText: prompt.speechText,
-      nightQueue,
-      nightQueueIndex: 0,
       activeStep: {
         kind: 'nightAction',
         playerId: current.playerId,
         roleId: current.roleId,
       },
       privateResult: undefined,
+      nightStageDurationSeconds: durationSeconds,
+      nightStageRemainingSeconds: durationSeconds,
+      nightStageEndsAt: Date.now() + durationSeconds * 1000,
     },
     updatedAt: Date.now(),
   });
 }
 
-function continueAfterPrivateStep(game: GameState) {
-  const nextIndex = game.flow.nightQueueIndex + 1;
-  if (nextIndex < game.flow.nightQueue.length) {
-    const current = game.flow.nightQueue[nextIndex];
-    const prompt = getNightPrompt(game, current);
-
-    return saveGame({
-      ...game,
-      flow: {
-        ...game.flow,
-        screen: 'private',
-        nightQueueIndex: nextIndex,
-        activeStep: {
-          kind: 'nightAction',
-          playerId: current.playerId,
-          roleId: current.roleId,
-        },
-        publicMessage: prompt.publicMessage,
-        helperText: prompt.helperText,
-        speechText: prompt.speechText,
-        privateResult: undefined,
-      },
-      updatedAt: Date.now(),
-    });
-  }
-
-  return resolveNight(game);
-}
-
 function resolveNight(game: GameState) {
   const tonight = game.nightActions.filter((action) => action.night === game.flow.day);
+  const killTarget = getNightKillTarget(game, game.flow.day);
   const protectedIds = new Set(
     tonight
       .filter((action) => action.effectType === 'protect' && action.targetId)
@@ -752,10 +846,6 @@ function resolveNight(game: GameState) {
   const poisonedIds = tonight
     .filter((action) => action.effectType === 'poison' && action.targetId)
     .map((action) => action.targetId!);
-  const wolfVotes = tonight.filter(
-    (action) => action.effectType === 'kill' && action.targetId,
-  ) as Array<NightAction & { targetId: PlayerId }>;
-  const killTarget = selectMostVotedTarget(wolfVotes);
 
   const deathIds = new Set<PlayerId>();
   if (killTarget && !protectedIds.has(killTarget) && !savedIds.has(killTarget)) {
@@ -769,15 +859,7 @@ function resolveNight(game: GameState) {
     deathIds.has(player.id) ? { ...player, isAlive: false } : player,
   );
 
-  const publicNotes = buildNightPublicNotes(
-    game.players,
-    nextPlayers,
-    deathIds,
-    killTarget,
-    protectedIds,
-    savedIds,
-    wolfVotes.length,
-  );
+  const publicMessage = buildNightPublicMessage(nextPlayers, deathIds);
 
   const resolved = addLog(
     {
@@ -788,93 +870,45 @@ function resolveNight(game: GameState) {
         screen: 'public',
         phase: 'day',
         title: `第 ${game.flow.day} 天`,
-        publicMessage: publicNotes.join(' '),
-        helperText: '白天讨论开始。你可以使用计时器控场，准备好后进入投票。',
-        speechText: publicNotes.join(' '),
-        actionLabel: '进入投票',
+        publicMessage,
+        helperText: '白天讨论开始。你可以使用计时器控场，线下统计票型后再录入出局玩家。',
+        speechText: '天亮了，请睁眼。',
+        actionLabel: '录入白天结果',
         activeStep: undefined,
         privateResult: undefined,
         discussionRemainingSeconds: game.flow.discussionDurationSeconds,
         discussionEndsAt: null,
+        nightStageDurationSeconds: 0,
+        nightStageRemainingSeconds: 0,
+        nightStageEndsAt: null,
       },
       updatedAt: Date.now(),
     },
     'day',
     'public',
-    '天亮结果',
-    publicNotes.join(' '),
+    `第 ${game.flow.day} 天亮`,
+    publicMessage,
   );
 
   return checkWinner(saveGame(resolved)) ?? saveGame(resolved);
 }
 
-function beginVoting(game: GameState) {
-  const voteOrder = game.players.filter((player) => player.isAlive).map((player) => player.id);
-  if (voteOrder.length === 0) {
-    return checkWinner(game) ?? game;
-  }
-
+function beginManualVote(game: GameState) {
   return saveGame({
     ...game,
     flow: {
       ...game.flow,
       screen: 'vote',
       phase: 'vote',
-      title: `第 ${game.flow.day} 天投票`,
-      publicMessage: '请依次完成白天投票。',
-      helperText: '每位存活玩家依次在手机上完成一次投票。',
-      speechText: '请依次完成白天投票。',
+      title: `第 ${game.flow.day} 天录入结果`,
+      publicMessage: '请线下统计投票结果后，在页面上选择最终出局玩家。',
+      helperText: '如果本轮平票或无人出局，请选择“无人出局”。',
+      speechText: '请录入白天结果。',
       actionLabel: '开始下一夜',
-      voteOrder,
-      voteIndex: 0,
       discussionEndsAt: null,
     },
     updatedAt: Date.now(),
   });
-}
-
-function resolveVote(game: GameState) {
-  const todayVotes = game.votes.filter((vote) => vote.day === game.flow.day);
-  const targetId = selectMostVotedTarget(
-    todayVotes
-      .filter((vote) => vote.type === 'normal' && vote.targetId)
-      .map((vote) => ({ targetId: vote.targetId! })),
-  );
-
-  let players = game.players;
-  let publicMessage = '投票结束，本轮无人出局。';
-
-  if (targetId) {
-    players = players.map((player) =>
-      player.id === targetId ? { ...player, isAlive: false } : player,
-    );
-    const target = players.find((player) => player.id === targetId);
-    if (target) {
-      publicMessage = `投票结束，${target.seat} 号 ${target.name} 被放逐出局。`;
-    }
-  }
-
-  return addLog(
-    {
-      ...game,
-      players,
-      flow: {
-        ...game.flow,
-        screen: 'public',
-        phase: 'vote',
-        title: `第 ${game.flow.day} 天结算`,
-        publicMessage,
-        helperText: '如果游戏未结束，点击进入下一夜。',
-        speechText: publicMessage,
-        actionLabel: '开始下一夜',
-      },
-      updatedAt: Date.now(),
-    },
-    'vote',
-    'public',
-    '白天投票结果',
-    publicMessage,
-  );
 }
 
 function startNightIntro(game: GameState) {
@@ -885,10 +919,10 @@ function startNightIntro(game: GameState) {
       screen: 'public',
       phase: 'night',
       title: `第 ${game.flow.day} 夜`,
-      publicMessage: '天黑请闭眼。点击后系统会依次唤醒拥有夜间技能的玩家。',
-      helperText: '同一玩家若拥有多个夜间身份，系统会按顺序逐个提示。',
-      speechText: '天黑请闭眼。系统将依次唤醒拥有夜间技能的玩家。',
-      actionLabel: '进入夜晚行动',
+      publicMessage: '天黑请闭眼。系统会按固定顺序依次进入狼人、预言家、守卫、女巫阶段。',
+      helperText: '每个阶段都会按预设倒计时执行，不会因为场上没有该角色而跳过。',
+      speechText: '天黑请闭眼。',
+      actionLabel: '开始夜晚流程',
       activeStep: undefined,
       privateResult: undefined,
       nightQueue: [],
@@ -897,6 +931,9 @@ function startNightIntro(game: GameState) {
       voteIndex: 0,
       discussionRemainingSeconds: game.flow.discussionDurationSeconds,
       discussionEndsAt: null,
+      nightStageDurationSeconds: 0,
+      nightStageRemainingSeconds: 0,
+      nightStageEndsAt: null,
     },
     updatedAt: Date.now(),
   });
@@ -946,9 +983,10 @@ function finishGame(
           title: '游戏结束',
           publicMessage: message,
           helperText: '你可以查看完整公开日志和隐藏夜晚日志进行复盘。',
-          speechText: message,
+          speechText: '游戏结束。',
           actionLabel: '回到首页',
           discussionEndsAt: null,
+          nightStageEndsAt: null,
         },
         updatedAt: Date.now(),
       },
@@ -982,10 +1020,14 @@ function createAssignedRole(roleId: RoleId) {
 
 function updateRoleResources(
   game: GameState,
-  playerId: PlayerId,
+  playerId: PlayerId | undefined,
   roleId: RoleId,
   resources: NonNullable<Player['identities'][number]['resources']>,
 ) {
+  if (!playerId) {
+    return game;
+  }
+
   return {
     ...game,
     players: game.players.map((player) => {
@@ -1011,61 +1053,20 @@ function updateRoleResources(
   };
 }
 
-function getAssignedRole(players: Player[], playerId: PlayerId, roleId: RoleId) {
+function getAssignedRole(
+  players: Player[],
+  playerId: PlayerId | undefined,
+  roleId: RoleId,
+) {
   const player = players.find((entry) => entry.id === playerId);
   return player?.identities.find((identity) => identity.roleId === roleId);
 }
 
-function getWitchContext(game: GameState, witchPlayerId: PlayerId) {
-  const tonight = game.nightActions.filter((action) => action.night === game.flow.day);
-  const wolfVotes = tonight.filter(
-    (action) => action.effectType === 'kill' && action.targetId,
-  ) as Array<NightAction & { targetId: PlayerId }>;
-  const attackedPlayerId = selectMostVotedTarget(wolfVotes);
-
-  return {
-    attackedPlayerId,
-    witchRole: getAssignedRole(game.players, witchPlayerId, 'witch'),
-  };
-}
-
 function buildNightQueue(players: Player[]) {
-  const queue: NightQueueItem[] = [];
-
-  players
-    .filter((player) => player.isAlive)
-    .forEach((player) => {
-      player.identities.forEach((identity) => {
-        const role = getRoleDefinition(identity.roleId);
-        if (!identity.enabled || !role.ability) {
-          return;
-        }
-
-        if (
-          identity.roleId === 'witch' &&
-          !identity.resources?.saveAvailable &&
-          !identity.resources?.poisonAvailable
-        ) {
-          return;
-        }
-
-        queue.push({
-          playerId: player.id,
-          roleId: identity.roleId,
-        });
-      });
-    });
-
-  return queue.sort((left, right) => {
-    const leftRole = getRoleDefinition(left.roleId);
-    const rightRole = getRoleDefinition(right.roleId);
-    if (leftRole.priority === rightRole.priority) {
-      const leftPlayer = players.find((player) => player.id === left.playerId);
-      const rightPlayer = players.find((player) => player.id === right.playerId);
-      return (leftPlayer?.seat ?? 0) - (rightPlayer?.seat ?? 0);
-    }
-    return leftRole.priority - rightRole.priority;
-  });
+  return FIXED_NIGHT_ORDER.map((roleId) => ({
+    roleId,
+    playerId: findFirstAliveRoleHolder(players, roleId),
+  }));
 }
 
 function getNightPrompt(game: GameState, queueItem: NightQueueItem) {
@@ -1073,30 +1074,58 @@ function getNightPrompt(game: GameState, queueItem: NightQueueItem) {
   if (queueItem.roleId !== 'witch') {
     return {
       publicMessage:
-        role.speechPrompt ?? '请当前被系统唤醒的玩家接过手机。',
-      helperText: role.ability?.prompt ?? '完成你的夜间动作。',
-      speechText: role.speechPrompt ?? '请当前被系统唤醒的玩家接过手机。',
+        role.speechPrompt ?? '请当前阶段对应身份的玩家接过手机。',
+      helperText:
+        queueItem.roleId === 'wolf'
+          ? '狼人阶段内由狼人线下讨论后，在手机上直接选择本夜击杀目标。'
+          : role.ability?.prompt ?? '请在本阶段完成操作。',
+      speechText: getStageSpeech(queueItem.roleId),
     };
   }
 
-  const context = getWitchContext(game, queueItem.playerId);
-  const witchRole = getAssignedRole(game.players, queueItem.playerId, 'witch');
-  const attackedPlayer = context.attackedPlayerId
-    ? game.players.find((player) => player.id === context.attackedPlayerId)
+  const attackedPlayerId = getNightKillTarget(game, game.flow.day);
+  const attacked = attackedPlayerId
+    ? game.players.find((player) => player.id === attackedPlayerId)
     : undefined;
+  const witchRole = getAssignedRole(game.players, queueItem.playerId, 'witch');
   const saveText =
-    attackedPlayer && witchRole?.resources?.saveAvailable
-      ? `今晚狼人票数最高的目标是 ${attackedPlayer.seat} 号 ${attackedPlayer.name}。`
-      : '今晚没有明确的狼人目标，或解药已用尽。';
+    attacked && witchRole?.resources?.saveAvailable
+      ? `本夜被击杀目标为 ${attacked.seat} 号 ${attacked.name}，你可以选择是否使用解药。`
+      : '当前没有可救目标，或解药已用尽。';
   const poisonText = witchRole?.resources?.poisonAvailable
-    ? '你仍然拥有毒药，可以选择任意其他存活玩家。'
+    ? '若要使用毒药，可在下方直接选择一名其他存活玩家。'
     : '你的毒药已经使用过，本夜无法毒人。';
 
   return {
-    publicMessage: role.speechPrompt ?? '请拥有女巫身份的玩家接过手机。',
+    publicMessage: role.speechPrompt ?? '女巫请睁眼。',
     helperText: `${saveText} ${poisonText}`,
-    speechText: role.speechPrompt ?? '请拥有女巫身份的玩家接过手机。',
+    speechText: getStageSpeech('witch'),
   };
+}
+
+function getStageSpeech(roleId: RoleId) {
+  switch (roleId) {
+    case 'wolf':
+      return '狼人请睁眼。';
+    case 'seer':
+      return '预言家请睁眼。';
+    case 'guard':
+      return '守卫请睁眼。';
+    case 'witch':
+      return '女巫请睁眼。';
+    default:
+      return '';
+  }
+}
+
+function getNightKillTarget(game: GameState, night: number) {
+  return game.nightActions.find(
+    (action) =>
+      action.night === night &&
+      action.roleId === 'wolf' &&
+      action.effectType === 'kill' &&
+      action.targetId,
+  )?.targetId;
 }
 
 function buildRoleDeck(roleCounts: RoleCounts) {
@@ -1116,46 +1145,38 @@ function buildRoleDeck(roleCounts: RoleCounts) {
   return deck;
 }
 
-function buildNightPublicNotes(
-  previousPlayers: Player[],
-  nextPlayers: Player[],
-  deathIds: Set<PlayerId>,
-  killTarget: PlayerId | undefined,
-  protectedIds: Set<PlayerId>,
-  savedIds: Set<PlayerId>,
-  wolfVoteCount: number,
-) {
-  const notes: string[] = ['天亮了。'];
-
+function buildNightPublicMessage(players: Player[], deathIds: Set<PlayerId>) {
   if (deathIds.size === 0) {
-    if (!killTarget && wolfVoteCount > 1) {
-      notes.push('昨夜狼人意见不统一，没有造成伤亡。');
-    } else if (killTarget && (protectedIds.has(killTarget) || savedIds.has(killTarget))) {
-      notes.push('昨夜有人遭遇袭击，但最终无人出局。');
-    } else {
-      notes.push('昨夜是平安夜，没有玩家出局。');
-    }
-    return notes;
+    return '天亮了。昨夜没有玩家出局。';
   }
 
-  const diedPlayers = nextPlayers.filter((player) => deathIds.has(player.id));
+  const diedPlayers = players.filter((player) => deathIds.has(player.id));
   const labels = diedPlayers.map((player) => `${player.seat} 号 ${player.name}`);
-  notes.push(`昨夜出局的玩家为：${labels.join('、')}。`);
+  return `天亮了。昨夜出局玩家：${labels.join('、')}。`;
+}
 
-  const poisonedOnly = diedPlayers.filter((player) => player.id !== killTarget);
-  if (poisonedOnly.length > 0) {
-    const poisonNames = poisonedOnly.map((player) => `${player.seat} 号`).join('、');
-    notes.push(`其中 ${poisonNames} 的出局可能与女巫毒药有关。`);
-  }
+function replaceNightAction(actions: NightAction[], nextAction: NightAction) {
+  return [
+    ...actions.filter(
+      (action) =>
+        !(
+          action.night === nextAction.night &&
+          action.roleId === nextAction.roleId &&
+          action.effectType === nextAction.effectType
+        ),
+    ),
+    nextAction,
+  ];
+}
 
-  const revived = previousPlayers.find(
-    (player) => player.id === killTarget && player.isAlive && !deathIds.has(player.id),
+function removeNightActionsForRole(
+  actions: NightAction[],
+  night: number,
+  roleId: RoleId,
+) {
+  return actions.filter(
+    (action) => !(action.night === night && action.roleId === roleId),
   );
-  if (revived && savedIds.has(revived.id)) {
-    notes.push('夜间也可能有人被救回。');
-  }
-
-  return notes;
 }
 
 function shuffle<T>(items: T[]) {
@@ -1167,28 +1188,11 @@ function shuffle<T>(items: T[]) {
   return next;
 }
 
-function selectMostVotedTarget<T extends { targetId: PlayerId }>(entries: T[]) {
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  const counts = new Map<PlayerId, number>();
-  for (const entry of entries) {
-    counts.set(entry.targetId, (counts.get(entry.targetId) ?? 0) + 1);
-  }
-
-  const sorted = [...counts.entries()].sort((left, right) => {
-    if (right[1] === left[1]) {
-      return left[0].localeCompare(right[0]);
-    }
-    return right[1] - left[1];
-  });
-
-  if (sorted.length > 1 && sorted[0][1] === sorted[1][1]) {
-    return undefined;
-  }
-
-  return sorted[0][0];
+function findFirstAliveRoleHolder(players: Player[], roleId: RoleId) {
+  return players.find(
+    (player) =>
+      player.isAlive && player.identities.some((identity) => identity.roleId === roleId),
+  )?.id;
 }
 
 function addLog(
@@ -1222,6 +1226,13 @@ function saveGame(game: GameState) {
   };
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   return next;
+}
+
+function clampBinary(value: number) {
+  if (value <= 0) {
+    return 0;
+  }
+  return 1;
 }
 
 function createId(prefix: string) {

@@ -7,6 +7,8 @@ export const BOARD_PRESETS: BoardDefinition[] = [
     description: '适合快速上手的轻量板子，带预言家、守卫和女巫。',
     playerCount: 6,
     discussionMinutes: 3,
+    wolfDiscussionSeconds: 45,
+    roleActionSeconds: 20,
     roleCounts: {
       wolf: 2,
       seer: 1,
@@ -21,6 +23,8 @@ export const BOARD_PRESETS: BoardDefinition[] = [
     description: '狼队压力更平衡，白天讨论空间更大。',
     playerCount: 8,
     discussionMinutes: 4,
+    wolfDiscussionSeconds: 60,
+    roleActionSeconds: 20,
     roleCounts: {
       wolf: 3,
       seer: 1,
@@ -35,6 +39,8 @@ export const BOARD_PRESETS: BoardDefinition[] = [
     description: '更接近完整线下主持体验，适合长局。',
     playerCount: 10,
     discussionMinutes: 5,
+    wolfDiscussionSeconds: 75,
+    roleActionSeconds: 25,
     roleCounts: {
       wolf: 4,
       seer: 1,

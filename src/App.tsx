@@ -29,6 +29,7 @@ import {
   submitReveal,
   submitVote,
   syncDiscussionTimer,
+  syncNightStageTimer,
   toggleSpeech,
 } from './lib/game';
 import type { BoardPresetId, DraftConfig, GameState, Player, RoleId } from './types';
@@ -85,6 +86,18 @@ function App() {
   }, [game?.flow.discussionEndsAt]);
 
   useEffect(() => {
+    if (!game?.flow.nightStageEndsAt) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      setGame((current) => (current ? syncNightStageTimer(current) : current));
+    }, 1000);
+
+    return () => window.clearInterval(timerId);
+  }, [game?.flow.nightStageEndsAt]);
+
+  useEffect(() => {
     return () => {
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
@@ -105,18 +118,6 @@ function App() {
       ? game.players[game.flow.revealIndex]
       : undefined;
 
-  const currentPrivatePlayer =
-    game?.flow.screen === 'private' && game.flow.activeStep?.kind === 'nightAction'
-      ? game.players.find((player) => player.id === game.flow.activeStep?.playerId)
-      : undefined;
-
-  const currentVotePlayer =
-    game?.flow.screen === 'vote'
-      ? game.players.find(
-          (player) => player.id === game.flow.voteOrder[game.flow.voteIndex],
-        )
-      : undefined;
-
   const currentTargets = useMemo(() => {
     if (!game?.flow.activeStep || game.flow.screen !== 'private') {
       return [];
@@ -135,7 +136,9 @@ function App() {
     if (!game) {
       return [];
     }
-    return (showPrivateLogs ? game.logs : game.logs.filter((log) => log.visibility === 'public')).slice().reverse();
+    return showPrivateLogs
+      ? game.logs
+      : game.logs.filter((log) => log.visibility === 'public');
   }, [game, showPrivateLogs]);
 
   const updatePlayerName = (index: number, name: string) => {
@@ -161,7 +164,10 @@ function App() {
     }));
   };
 
-  const updateCustomRoleCount = (roleId: Exclude<RoleId, 'villager'>, value: number) => {
+  const updateCustomRoleCount = (
+    roleId: Exclude<RoleId, 'villager'>,
+    value: number,
+  ) => {
     setDraft((current) => ({
       ...current,
       boardId: 'custom',
@@ -178,6 +184,18 @@ function App() {
       ...current,
       boardId: current.boardId === 'custom' ? 'custom' : current.boardId,
       discussionMinutes: minutes,
+    }));
+  };
+
+  const handleNightSecondsChange = (
+    key: 'wolfDiscussionSeconds' | 'roleActionSeconds',
+    value: number,
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      boardId: 'custom',
+      boardName: '自定义板子',
+      [key]: Math.max(5, value),
     }));
   };
 
@@ -241,7 +259,7 @@ function App() {
           <div className="eyebrow">Single Device Host</div>
           <h1>双身份狼人杀自动主持</h1>
           <p className="lead">
-            单手机、无人类 DM、带语音播报、带复盘日志的线下主持网页。
+            单手机、无人类 DM、带语音播报和复盘日志的线下主持网页。
           </p>
         </section>
 
@@ -252,14 +270,14 @@ function App() {
               {PRESETS.map((preset) => (
                 <button
                   key={preset.id}
-                  className={`preset-card ${
-                    draft.boardId === preset.id ? 'selected' : ''
-                  }`}
+                  className={`preset-card ${draft.boardId === preset.id ? 'selected' : ''}`}
                   onClick={() => handlePresetChange(preset.id)}
                 >
                   <strong>{preset.name}</strong>
                   <span>{preset.description}</span>
-                  <small>{preset.playerCount} 人 / {preset.discussionMinutes} 分钟讨论</small>
+                  <small>
+                    {preset.playerCount} 人 / {preset.discussionMinutes} 分钟讨论
+                  </small>
                 </button>
               ))}
 
@@ -268,8 +286,8 @@ function App() {
                 onClick={() => handlePresetChange('custom')}
               >
                 <strong>自定义板子</strong>
-                <span>手动设置玩家人数和各类身份数量。</span>
-                <small>适合自己调规则</small>
+                <span>手动设置玩家人数、夜晚阶段时长和身份数量。</span>
+                <small>适合按线下习惯微调流程</small>
               </button>
             </div>
 
@@ -307,6 +325,40 @@ function App() {
               </label>
             </div>
 
+            <div className="field-row">
+              <label className="field">
+                <span>狼人讨论时间</span>
+                <input
+                  type="number"
+                  min={5}
+                  step={5}
+                  value={draft.wolfDiscussionSeconds}
+                  onChange={(event) =>
+                    handleNightSecondsChange(
+                      'wolfDiscussionSeconds',
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+
+              <label className="field">
+                <span>其他角色时间</span>
+                <input
+                  type="number"
+                  min={5}
+                  step={5}
+                  value={draft.roleActionSeconds}
+                  onChange={(event) =>
+                    handleNightSecondsChange(
+                      'roleActionSeconds',
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+            </div>
+
             {draft.boardId === 'custom' ? (
               <div className="custom-grid">
                 {([
@@ -320,6 +372,7 @@ function App() {
                     <input
                       type="number"
                       min={roleId === 'wolf' ? 1 : 0}
+                      max={roleId === 'wolf' ? draft.playerCount * 2 : 1}
                       value={draft.roleCounts[roleId]}
                       onChange={(event) =>
                         updateCustomRoleCount(roleId, Number(event.target.value))
@@ -398,13 +451,13 @@ function App() {
             </div>
 
             <div className="info-block">
-              <strong>女巫规则</strong>
-              <p>本版女巫每晚只能在“救人 / 毒人 / 跳过”里三选一，更适合单手机操作。</p>
+              <strong>夜晚节奏</strong>
+              <p>夜晚固定按狼人、预言家、守卫、女巫顺序执行，不会因为场上没有该角色而跳过。</p>
             </div>
 
             <div className="info-block">
-              <strong>阵营判定</strong>
-              <p>任一身份为狼人，则该玩家整体按狼人阵营结算。</p>
+              <strong>女巫规则</strong>
+              <p>女巫会看到本夜记录的击杀目标，并在固定时长内选择救人、毒人或跳过。</p>
             </div>
           </aside>
         </section>
@@ -415,32 +468,32 @@ function App() {
             <div className="release-steps">
               <div className="info-block">
                 <strong>1. 选板子并填玩家</strong>
-                <p>可直接用预设板子，也可以切到自定义板子手调角色数量。</p>
+                <p>可直接用预设板子，也可以切到自定义板子微调夜晚阶段时间。</p>
               </div>
               <div className="info-block">
                 <strong>2. 按座位依次看身份</strong>
                 <p>每位玩家拿到手机只看自己的双身份，确认后立刻交给下一位。</p>
               </div>
               <div className="info-block">
-                <strong>3. 网页自动主持整局</strong>
-                <p>网页负责夜晚唤醒、白天计时、投票结算、语音播报与赛后复盘。</p>
+                <strong>3. 网页按固定阶段主持</strong>
+                <p>网页只播报阶段语音，夜晚和白天结果都通过页面手动记录，避免暴露场上角色信息。</p>
               </div>
             </div>
           </article>
 
           <article className="card release-card">
-            <div className="section-title">安装与离线</div>
+            <div className="section-title">使用提示</div>
             <div className="info-block">
-              <strong>建议安装成桌面应用</strong>
-              <p>在 Chrome 或 Edge 打开网页后，可使用“安装应用”或“添加到主屏幕”。安装后更像原生主持工具。</p>
+              <strong>语音默认开启</strong>
+              <p>大多数浏览器需要你先点一次页面按钮，后续阶段播报才会正常响起。</p>
             </div>
             <div className="info-block">
-              <strong>首次联网打开一次</strong>
-              <p>浏览器会缓存主界面和静态资源。之后即使现场网络不稳定，也能继续打开并恢复本地存档。</p>
+              <strong>白天投票自行统计</strong>
+              <p>线下先统计票型，再在页面里直接录入最终出局玩家或“无人出局”。</p>
             </div>
             <div className="info-block">
-              <strong>语音播报提示</strong>
-              <p>大多数浏览器需要你先点一次按钮才允许播放语音，所以开局前建议先手动点击“开启语音”。</p>
+              <strong>重要对局建议导出</strong>
+              <p>对局状态保存在本地浏览器，长局或关键局建议中途导出 JSON 备份。</p>
             </div>
           </article>
         </section>
@@ -448,7 +501,8 @@ function App() {
     );
   }
 
-  const timerRunning = Boolean(game.flow.discussionEndsAt);
+  const discussionTimerRunning = Boolean(game.flow.discussionEndsAt);
+  const nightTimerRunning = Boolean(game.flow.nightStageEndsAt);
   const boardSummary = getBoardSummary(game.config);
 
   return (
@@ -579,10 +633,10 @@ function App() {
                 {formatSeconds(game.flow.discussionRemainingSeconds)}
               </div>
               <p className="helper-text">
-                {timerRunning ? '计时进行中' : '计时暂停中'}
+                {discussionTimerRunning ? '计时进行中' : '计时暂停中'}
               </p>
               <div className="button-row">
-                {timerRunning ? (
+                {discussionTimerRunning ? (
                   <button
                     className="secondary"
                     onClick={() =>
@@ -601,7 +655,6 @@ function App() {
                     开始
                   </button>
                 )}
-
                 <button
                   className="ghost"
                   onClick={() =>
@@ -616,42 +669,32 @@ function App() {
             <aside className="card info-card">
               <div className="section-title">主持提示</div>
               <p className="helper-text">
-                夜晚流程会依次唤醒有技能的身份。每步提交后，页面会立刻隐藏私密信息。
+                夜晚会按固定角色顺序执行，每个阶段都使用固定时长，避免通过跳过环节判断场上有没有某个角色。
               </p>
             </aside>
           )}
         </section>
       ) : null}
 
-      {game.flow.screen === 'private' &&
-      game.flow.activeStep?.kind === 'nightAction' &&
-      currentPrivatePlayer ? (
+      {game.flow.screen === 'private' && game.flow.activeStep ? (
         <section className="card private-card">
-          <div className="section-title">私密操作</div>
+          <div className="section-title">夜晚阶段</div>
           <p className="lead-tight">{game.flow.publicMessage}</p>
+          <div className="timer-display compact">
+            {formatSeconds(game.flow.nightStageRemainingSeconds)}
+          </div>
+          <p className="helper-text">
+            {nightTimerRunning
+              ? '本阶段会按倒计时自动结束，不会因为是否存在角色而提前跳过。'
+              : '本阶段已结束，系统即将进入下一步。'}
+          </p>
 
           {game.flow.privateResult ? (
-            <>
-              <div className="result-banner">{game.flow.privateResult}</div>
-              <div className="button-row">
-                <button
-                  className="primary"
-                  onClick={() =>
-                    setGame((current) =>
-                      current
-                        ? submitPrivateStep(current, current.flow.activeStep!)
-                        : current,
-                    )
-                  }
-                >
-                  完成并交回手机
-                </button>
-              </div>
-            </>
+            <div className="result-banner">{game.flow.privateResult}</div>
           ) : (
             <>
               <div className="private-role">
-                <div className="identity-label">当前身份</div>
+                <div className="identity-label">当前阶段</div>
                 <div className="identity-name">
                   {getRoleDefinition(game.flow.activeStep.roleId).name}
                 </div>
@@ -703,9 +746,11 @@ function App() {
                     >
                       <span>{target.seat} 号</span>
                       <strong>
-                        {game.flow.activeStep?.roleId === 'witch'
-                          ? `毒 ${target.name}`
-                          : target.name}
+                        {game.flow.activeStep?.roleId === 'wolf'
+                          ? `击杀 ${target.name}`
+                          : game.flow.activeStep?.roleId === 'witch'
+                            ? `毒 ${target.name}`
+                            : target.name}
                       </strong>
                     </button>
                   ))}
@@ -716,40 +761,32 @@ function App() {
         </section>
       ) : null}
 
-      {game.flow.screen === 'vote' && currentVotePlayer ? (
+      {game.flow.screen === 'vote' ? (
         <section className="card vote-card">
-          <div className="section-title">依次投票</div>
-          <p className="lead-tight">
-            请 {currentVotePlayer.seat} 号玩家 <strong>{currentVotePlayer.name}</strong>{' '}
-            投票。
-          </p>
+          <div className="section-title">录入白天结果</div>
+          <p className="lead-tight">{game.flow.publicMessage}</p>
+          <p className="helper-text">{game.flow.helperText}</p>
           <div className="target-grid">
-            {alivePlayers
-              .filter((player) => player.id !== currentVotePlayer.id)
-              .map((player) => (
-                <button
-                  key={player.id}
-                  className="target-button"
-                  onClick={() =>
-                    setGame((current) =>
-                      current ? submitVote(current, currentVotePlayer.id, player.id) : current,
-                    )
-                  }
-                >
-                  <span>{player.seat} 号</span>
-                  <strong>{player.name}</strong>
-                </button>
-              ))}
+            {alivePlayers.map((player) => (
+              <button
+                key={player.id}
+                className="target-button"
+                onClick={() =>
+                  setGame((current) => (current ? submitVote(current, player.id) : current))
+                }
+              >
+                <span>{player.seat} 号</span>
+                <strong>{player.name} 出局</strong>
+              </button>
+            ))}
             <button
               className="target-button abstain-button"
               onClick={() =>
-                setGame((current) =>
-                  current ? submitVote(current, currentVotePlayer.id, 'abstain') : current,
-                )
+                setGame((current) => (current ? submitVote(current, 'abstain') : current))
               }
             >
-              <span>本轮选择</span>
-              <strong>弃票</strong>
+              <span>本轮结果</span>
+              <strong>无人出局</strong>
             </button>
           </div>
         </section>
@@ -794,16 +831,14 @@ function App() {
             <div className="section-title">复盘日志</div>
             <p className="helper-text">
               {showPrivateLogs
-                ? '当前显示完整日志，包含夜间私密记录。'
-                : '当前显示公开日志，适合赛后回顾白天流程。'}
+                ? '当前显示完整日志，包含夜晚私密记录。'
+                : '当前显示公开日志，按第一夜、第一天、第二夜这样的顺序展示。'}
             </p>
             <div className="log-list">
               {visibleLogs.map((event) => (
                 <div className="log-item" key={event.id}>
                   <div>
-                    <span className="log-pill">
-                      第 {event.day} 天 / {event.phase}
-                    </span>
+                    <span className="log-pill">{formatLogPhase(event.day, event.phase)}</span>
                     <strong>{event.title}</strong>
                   </div>
                   <p>{event.message}</p>
@@ -815,6 +850,19 @@ function App() {
       ) : null}
     </main>
   );
+}
+
+function formatLogPhase(day: number, phase: GameState['logs'][number]['phase']) {
+  if (phase === 'night') {
+    return `第 ${day} 夜`;
+  }
+  if (phase === 'day' || phase === 'vote') {
+    return `第 ${day} 天`;
+  }
+  if (phase === 'reveal') {
+    return '发身份';
+  }
+  return '结算';
 }
 
 function PlayerCard({
