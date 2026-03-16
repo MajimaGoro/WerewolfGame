@@ -324,13 +324,23 @@ export function getPrivateStepTargets(game: GameState, step: ActiveStep) {
     return [];
   }
 
+  if (step.roleId === 'witch') {
+    const witchRole = getAssignedRole(game.players, step.playerId, 'witch');
+    if (!witchRole?.resources?.poisonAvailable) {
+      return [];
+    }
+  }
+
   return game.players.filter((player) => {
     if (!player.isAlive) {
       return false;
     }
-    if (step.roleId !== 'wolf' && player.id === step.playerId) {
+
+    const allowSelfTarget = step.roleId === 'wolf' || step.roleId === 'guard';
+    if (!allowSelfTarget && player.id === step.playerId) {
       return false;
     }
+
     return true;
   });
 }
