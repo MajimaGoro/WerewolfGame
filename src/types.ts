@@ -28,6 +28,7 @@ export interface AssignedRole {
   roleId: RoleId;
   enabled: boolean;
   exposed: boolean;
+  isAlive: boolean;
   resources?: {
     saveAvailable?: boolean;
     poisonAvailable?: boolean;
@@ -84,6 +85,7 @@ export interface FlowState {
   publicMessage: string;
   helperText: string;
   speechText: string;
+  speechNonce: number;
   actionLabel: string;
   revealIndex: number;
   nightQueue: NightQueueItem[];
@@ -98,6 +100,7 @@ export interface FlowState {
   nightStageDurationSeconds: number;
   nightStageRemainingSeconds: number;
   nightStageEndsAt: number | null;
+  nightStageMode: 'active' | 'closing';
 }
 
 export interface RoleCounts {
