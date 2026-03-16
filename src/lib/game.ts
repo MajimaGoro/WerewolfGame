@@ -24,7 +24,9 @@ import type {
 const STORAGE_KEY = 'werewolf-game-mvp';
 const FIXED_NIGHT_ORDER: RoleId[] = ['wolf', 'seer', 'guard', 'witch'];
 const SPECIAL_ROLE_IDS: Exclude<RoleId, 'villager'>[] = ['wolf', 'seer', 'guard', 'witch'];
+const DEFAULT_NIGHT_INTRO_SECONDS = 3;
 const STAGE_CLOSE_DELAY_SECONDS = 2;
+const DEFAULT_ROLE_TRANSITION_SECONDS = 2;
 
 export function getRoleDefinition(roleId: RoleId) {
   return ROLE_DEFINITIONS[roleId];
@@ -48,6 +50,8 @@ export function newDraftConfig(): DraftConfig {
     discussionMinutes: preset.discussionMinutes,
     wolfDiscussionSeconds: preset.wolfDiscussionSeconds,
     roleActionSeconds: preset.roleActionSeconds,
+    nightIntroSeconds: preset.nightIntroSeconds,
+    roleTransitionSeconds: preset.roleTransitionSeconds,
     roleCounts: { ...preset.roleCounts },
   };
 }
@@ -88,6 +92,8 @@ export function applyBoardPreset(
     discussionMinutes: preset.discussionMinutes,
     wolfDiscussionSeconds: preset.wolfDiscussionSeconds,
     roleActionSeconds: preset.roleActionSeconds,
+    nightIntroSeconds: preset.nightIntroSeconds,
+    roleTransitionSeconds: preset.roleTransitionSeconds,
     roleCounts: { ...preset.roleCounts },
   };
 }
@@ -147,6 +153,8 @@ export function createGame(draft: DraftConfig): GameState {
     discussionMinutes: draft.discussionMinutes,
     wolfDiscussionSeconds: draft.wolfDiscussionSeconds,
     roleActionSeconds: draft.roleActionSeconds,
+    nightIntroSeconds: draft.nightIntroSeconds,
+    roleTransitionSeconds: draft.roleTransitionSeconds,
     roleCounts,
   };
   const deck = shuffle(buildRoleDeck(roleCounts));
@@ -282,6 +290,8 @@ export function getBoardSummary(config: GameConfig | DraftConfig) {
     `${roleCounts.villager} 张村民`,
     `狼人讨论 ${config.wolfDiscussionSeconds} 秒`,
     `其他角色 ${config.roleActionSeconds} 秒`,
+    `入夜等待 ${config.nightIntroSeconds} 秒`,
+    `角色切换等待 ${config.roleTransitionSeconds} 秒`,
   ];
 }
 
@@ -517,11 +527,7 @@ export function syncDiscussionTimer(game: GameState) {
 }
 
 export function syncNightStageTimer(game: GameState) {
-  if (
-    game.flow.screen !== 'private' ||
-    !game.flow.nightStageEndsAt ||
-    !game.flow.activeStep
-  ) {
+  if (!game.flow.nightStageEndsAt) {
     return game;
   }
 
@@ -534,20 +540,53 @@ export function syncNightStageTimer(game: GameState) {
     return game;
   }
 
-  if (remainingSeconds === 0 && game.flow.nightStageMode === 'active') {
+  if (remainingSeconds === 0 && game.flow.nightStageMode === 'intro') {
+    return startNightStage(
+      saveGame({
+        ...game,
+        flow: {
+          ...game.flow,
+          nightStageRemainingSeconds: 0,
+          nightStageEndsAt: null,
+        },
+        updatedAt: Date.now(),
+      }),
+    );
+  }
+
+  if (
+    remainingSeconds === 0 &&
+    game.flow.nightStageMode === 'active' &&
+    game.flow.activeStep
+  ) {
     return saveGame({
       ...game,
       flow: withSpeech(
         {
           ...game.flow,
           nightStageMode: 'closing',
-          nightStageDurationSeconds: STAGE_CLOSE_DELAY_SECONDS,
-          nightStageRemainingSeconds: STAGE_CLOSE_DELAY_SECONDS,
-          nightStageEndsAt: Date.now() + STAGE_CLOSE_DELAY_SECONDS * 1000,
+        nightStageDurationSeconds: STAGE_CLOSE_DELAY_SECONDS,
+        nightStageRemainingSeconds: STAGE_CLOSE_DELAY_SECONDS,
+        nightStageEndsAt: Date.now() + STAGE_CLOSE_DELAY_SECONDS * 1000,
           privateResult: '本阶段已结束，请闭眼等待下一步。',
         },
         getStageCloseSpeech(game.flow.activeStep.roleId),
       ),
+      updatedAt: Date.now(),
+    });
+  }
+
+  if (remainingSeconds === 0 && game.flow.nightStageMode === 'closing') {
+    return saveGame({
+      ...game,
+      flow: {
+        ...game.flow,
+        nightStageMode: 'transition',
+        nightStageDurationSeconds: game.config.roleTransitionSeconds,
+        nightStageRemainingSeconds: game.config.roleTransitionSeconds,
+        nightStageEndsAt: Date.now() + game.config.roleTransitionSeconds * 1000,
+        privateResult: '请继续闭眼，下一位角色准备中。',
+      },
       updatedAt: Date.now(),
     });
   }
@@ -562,7 +601,7 @@ export function syncNightStageTimer(game: GameState) {
     updatedAt: Date.now(),
   });
 
-  if (remainingSeconds === 0 && game.flow.nightStageMode === 'closing') {
+  if (remainingSeconds === 0 && game.flow.nightStageMode === 'transition') {
     return continueAfterPrivateStep(withTick);
   }
 
@@ -830,13 +869,29 @@ function submitWitchAction(
 
 function beginNightActions(game: GameState) {
   const nightQueue = buildNightQueue(game.players);
-  return startNightStage({
+  return saveGame({
     ...game,
-    flow: {
-      ...game.flow,
-      nightQueue,
-      nightQueueIndex: 0,
-    },
+    flow: withSpeech(
+      {
+        ...game.flow,
+        screen: 'public',
+        phase: 'night',
+        title: `第 ${game.flow.day} 夜`,
+        publicMessage: '天黑请闭眼。夜晚流程即将开始。',
+        helperText: '请所有人闭眼等待，系统会在短暂停顿后依次播报各角色睁眼。',
+        actionLabel: '夜晚流程进行中',
+        nightQueue,
+        nightQueueIndex: 0,
+        activeStep: undefined,
+        privateResult: undefined,
+        nightStageDurationSeconds: game.config.nightIntroSeconds,
+        nightStageRemainingSeconds: game.config.nightIntroSeconds,
+        nightStageEndsAt: Date.now() + game.config.nightIntroSeconds * 1000,
+        nightStageMode: 'intro',
+      },
+      '天黑请闭眼。',
+    ),
+    updatedAt: Date.now(),
   });
 }
 
@@ -997,32 +1052,30 @@ function beginManualVote(game: GameState) {
 function startNightIntro(game: GameState) {
   return saveGame({
     ...game,
-    flow: withSpeech(
-      {
-        ...game.flow,
-        screen: 'public',
-        phase: 'night',
-        title: `第 ${game.flow.day} 夜`,
-        publicMessage:
-          '天黑请闭眼。系统会按固定顺序依次进入狼人、预言家、守卫、女巫阶段。',
-        helperText:
-          '每个阶段都会按预设倒计时执行，不会因为场上没有对应角色而跳过。',
-        actionLabel: '开始夜晚流程',
-        activeStep: undefined,
-        privateResult: undefined,
-        nightQueue: [],
-        nightQueueIndex: 0,
-        voteOrder: [],
-        voteIndex: 0,
-        discussionRemainingSeconds: game.flow.discussionDurationSeconds,
-        discussionEndsAt: null,
-        nightStageDurationSeconds: 0,
-        nightStageRemainingSeconds: 0,
-        nightStageEndsAt: null,
-        nightStageMode: 'active',
-      },
-      '天黑请闭眼。',
-    ),
+    flow: {
+      ...game.flow,
+      screen: 'public',
+      phase: 'night',
+      title: `第 ${game.flow.day} 夜`,
+      publicMessage:
+        '准备进入夜晚。点击开始后，系统才会播报“天黑请闭眼”，并自动进入夜晚流程。',
+      helperText:
+        '每个阶段都会按预设倒计时执行，不会因为场上没有对应角色而跳过；角色闭眼与下一位睁眼之间会保留缓冲时间。',
+      speechText: '',
+      actionLabel: '开始夜晚流程',
+      activeStep: undefined,
+      privateResult: undefined,
+      nightQueue: [],
+      nightQueueIndex: 0,
+      voteOrder: [],
+      voteIndex: 0,
+      discussionRemainingSeconds: game.flow.discussionDurationSeconds,
+      discussionEndsAt: null,
+      nightStageDurationSeconds: 0,
+      nightStageRemainingSeconds: 0,
+      nightStageEndsAt: null,
+      nightStageMode: 'active',
+    },
     updatedAt: Date.now(),
   });
 }
@@ -1414,6 +1467,14 @@ function hydrateGame(parsed: GameState) {
     return null;
   }
 
+  const config: GameConfig = {
+    ...parsed.config,
+    nightIntroSeconds:
+      parsed.config.nightIntroSeconds ?? DEFAULT_NIGHT_INTRO_SECONDS,
+    roleTransitionSeconds:
+      parsed.config.roleTransitionSeconds ?? DEFAULT_ROLE_TRANSITION_SECONDS,
+  };
+
   const players = parsed.players.map<Player>((player) => {
     const identities = player.identities.map((identity) => ({
       ...identity,
@@ -1454,9 +1515,9 @@ function hydrateGame(parsed: GameState) {
     voteOrder: parsed.flow.voteOrder ?? [],
     voteIndex: parsed.flow.voteIndex ?? 0,
     discussionDurationSeconds:
-      parsed.flow.discussionDurationSeconds ?? parsed.config.discussionMinutes * 60,
+      parsed.flow.discussionDurationSeconds ?? config.discussionMinutes * 60,
     discussionRemainingSeconds:
-      parsed.flow.discussionRemainingSeconds ?? parsed.config.discussionMinutes * 60,
+      parsed.flow.discussionRemainingSeconds ?? config.discussionMinutes * 60,
     discussionEndsAt: parsed.flow.discussionEndsAt ?? null,
     nightStageDurationSeconds: parsed.flow.nightStageDurationSeconds ?? 0,
     nightStageRemainingSeconds: parsed.flow.nightStageRemainingSeconds ?? 0,
@@ -1466,6 +1527,7 @@ function hydrateGame(parsed: GameState) {
 
   return {
     ...parsed,
+    config,
     players,
     flow,
     updatedAt: Date.now(),

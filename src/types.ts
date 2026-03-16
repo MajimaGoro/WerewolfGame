@@ -100,7 +100,7 @@ export interface FlowState {
   nightStageDurationSeconds: number;
   nightStageRemainingSeconds: number;
   nightStageEndsAt: number | null;
-  nightStageMode: 'active' | 'closing';
+  nightStageMode: 'active' | 'closing' | 'intro' | 'transition';
 }
 
 export interface RoleCounts {
@@ -119,6 +119,8 @@ export interface BoardDefinition {
   discussionMinutes: number;
   wolfDiscussionSeconds: number;
   roleActionSeconds: number;
+  nightIntroSeconds: number;
+  roleTransitionSeconds: number;
   roleCounts: RoleCounts;
 }
 
@@ -130,6 +132,8 @@ export interface GameConfig {
   discussionMinutes: number;
   wolfDiscussionSeconds: number;
   roleActionSeconds: number;
+  nightIntroSeconds: number;
+  roleTransitionSeconds: number;
   roleCounts: RoleCounts;
 }
 
@@ -141,6 +145,8 @@ export interface DraftConfig {
   discussionMinutes: number;
   wolfDiscussionSeconds: number;
   roleActionSeconds: number;
+  nightIntroSeconds: number;
+  roleTransitionSeconds: number;
   roleCounts: RoleCounts;
 }
 

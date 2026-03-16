@@ -200,14 +200,21 @@ function App() {
   };
 
   const handleNightSecondsChange = (
-    key: 'wolfDiscussionSeconds' | 'roleActionSeconds',
+    key:
+      | 'wolfDiscussionSeconds'
+      | 'roleActionSeconds'
+      | 'nightIntroSeconds'
+      | 'roleTransitionSeconds',
     value: number,
   ) => {
+    const minValue =
+      key === 'nightIntroSeconds' || key === 'roleTransitionSeconds' ? 1 : 5;
+
     setDraft((current) => ({
       ...current,
       boardId: 'custom',
       boardName: '自定义板子',
-      [key]: Math.max(5, value),
+      [key]: Math.max(minValue, value),
     }));
   };
 
@@ -369,6 +376,40 @@ function App() {
               </label>
             </div>
 
+            <div className="field-row">
+              <label className="field">
+                <span>入夜等待时间</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={draft.nightIntroSeconds}
+                  onChange={(event) =>
+                    handleNightSecondsChange(
+                      'nightIntroSeconds',
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+
+              <label className="field">
+                <span>角色切换等待</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={draft.roleTransitionSeconds}
+                  onChange={(event) =>
+                    handleNightSecondsChange(
+                      'roleTransitionSeconds',
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+            </div>
+
             {draft.boardId === 'custom' ? (
               <div className="custom-grid">
                 {([
@@ -474,7 +515,15 @@ function App() {
   const nightTimerRunning = Boolean(game.flow.nightStageEndsAt);
   const boardSummary = getBoardSummary(game.config);
   const revealReady = currentRevealPlayer?.identities.every((identity) => identity.exposed);
-  const closingStage = game.flow.screen === 'private' && game.flow.nightStageMode === 'closing';
+  const waitingNightStage =
+    game.flow.screen === 'private' &&
+    (game.flow.nightStageMode === 'closing' ||
+      game.flow.nightStageMode === 'transition');
+  const nightIntroRunning =
+    game.flow.screen === 'public' &&
+    game.flow.phase === 'night' &&
+    game.flow.nightStageMode === 'intro' &&
+    nightTimerRunning;
 
   return (
     <main className="app-shell">
@@ -582,13 +631,20 @@ function App() {
             </div>
             <p className="broadcast-text">{game.flow.publicMessage}</p>
             <p className="helper-text">{game.flow.helperText}</p>
+            {nightIntroRunning ? (
+              <div className="timer-display compact">
+                {formatSeconds(game.flow.nightStageRemainingSeconds)}
+              </div>
+            ) : null}
             <div className="button-row">
-              <button
-                className="primary"
-                onClick={() => setGame((current) => (current ? startNextPublicStep(current) : current))}
-              >
-                {game.flow.actionLabel}
-              </button>
+              {nightIntroRunning ? null : (
+                <button
+                  className="primary"
+                  onClick={() => setGame((current) => (current ? startNextPublicStep(current) : current))}
+                >
+                  {game.flow.actionLabel}
+                </button>
+              )}
             </div>
           </section>
 
@@ -638,15 +694,15 @@ function App() {
           <p className="lead-tight">{game.flow.publicMessage}</p>
           <div className="timer-display compact">{formatSeconds(game.flow.nightStageRemainingSeconds)}</div>
           <p className="helper-text">
-            {closingStage
+            {waitingNightStage
               ? '本阶段已截止，系统会在闭眼播报后自动进入下一步。'
               : nightTimerRunning
                 ? '本阶段按倒计时自动结束，不会因为是否有人操作而提前跳过。'
                 : '系统即将进入下一步。'}
           </p>
 
-          {closingStage ? (
-            <div className="result-banner">本阶段已结束，请闭眼等待下一步。</div>
+          {waitingNightStage ? (
+            <div className="result-banner">{game.flow.privateResult ?? '请闭眼等待下一步。'}</div>
           ) : game.flow.privateResult ? (
             <div className="result-banner">{game.flow.privateResult}</div>
           ) : !game.flow.activeStep.playerId ? (

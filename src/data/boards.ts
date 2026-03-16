@@ -1,4 +1,4 @@
-import type { BoardDefinition } from '../types';
+﻿import type { BoardDefinition } from '../types';
 
 export const BOARD_PRESETS: BoardDefinition[] = [
   {
@@ -9,6 +9,8 @@ export const BOARD_PRESETS: BoardDefinition[] = [
     discussionMinutes: 3,
     wolfDiscussionSeconds: 45,
     roleActionSeconds: 20,
+    nightIntroSeconds: 3,
+    roleTransitionSeconds: 2,
     roleCounts: {
       wolf: 2,
       seer: 1,
@@ -20,11 +22,13 @@ export const BOARD_PRESETS: BoardDefinition[] = [
   {
     id: 'crescent-8',
     name: '弦月 8 人局',
-    description: '狼队压力更平衡，白天讨论空间更大。',
+    description: '狼人压力更平衡，白天讨论空间更大。',
     playerCount: 8,
     discussionMinutes: 4,
     wolfDiscussionSeconds: 60,
     roleActionSeconds: 20,
+    nightIntroSeconds: 3,
+    roleTransitionSeconds: 2,
     roleCounts: {
       wolf: 3,
       seer: 1,
@@ -41,6 +45,8 @@ export const BOARD_PRESETS: BoardDefinition[] = [
     discussionMinutes: 5,
     wolfDiscussionSeconds: 75,
     roleActionSeconds: 25,
+    nightIntroSeconds: 3,
+    roleTransitionSeconds: 2,
     roleCounts: {
       wolf: 4,
       seer: 1,
