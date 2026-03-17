@@ -278,7 +278,7 @@ function App() {
           <div className="eyebrow">Single Device Host</div>
           <h1>双身份狼人杀自动主持</h1>
           <p className="lead">
-            单手机、无真人 DM、默认开启语音播报的线下主持网页。
+            单手机、无真人 DM、固定语音播报与夜晚缓冲可配置的线下主持网页。
           </p>
         </section>
 
@@ -504,6 +504,16 @@ function App() {
             <div className="info-block">
               <strong>双身份规则</strong>
               <p>玩家每次只会失去一个身份。两个身份都死亡后才算真正出局，不能再发言或投票。</p>
+            </div>
+
+            <div className="info-block">
+              <strong>夜晚节奏</strong>
+              <p>点击开始夜晚流程后才会播报“天黑请闭眼”，并且角色闭眼与下一位睁眼之间会自动保留可配置缓冲时间。</p>
+            </div>
+
+            <div className="info-block">
+              <strong>当前角色规则</strong>
+              <p>狼人可自刀，守卫可自守，女巫只有一瓶毒药且用完后不再显示毒人选项。</p>
             </div>
           </aside>
         </section>
